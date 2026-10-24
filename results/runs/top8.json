@@ -34,7 +34,8 @@
     "scores_path": "results/scores/layer_scores.json",
     "cost_model_path": "results/scores/cost_model.json",
     "split_cache": "data/splits.json",
-    "train_only_probe": false
+    "train_only_probe": false,
+    "reprobe_only": false
   },
   "layers": [
     16,
@@ -53,15 +54,16 @@
   "trainable_params": 2932736,
   "total_params": 496965504,
   "memory": {
-    "probe_peak_gb": 6.231,
-    "probe_reserved_gb": 6.502,
-    "weights_gb": 4.1343,
+    "probe_peak_gb": 3.0387,
+    "probe_reserved_gb": 3.1934,
+    "weights_gb": 0.9312,
     "probe_bs": 4,
     "probe_seq_len": 512,
-    "saved_act_gb_per_256tok": 0.2155
+    "saved_act_gb_per_256tok": 0.2155,
+    "isolated": true
   },
   "gpu": "Tesla T4",
-  "git": "d869512",
+  "git": "dde20ad",
   "started": "2026-10-24T11:12:15+00:00",
   "train": {
     "steps": 750,
@@ -70,5 +72,26 @@
     "tok_s": 5822.2,
     "final_loss_ema": 1.580615747788869,
     "train_peak_gb": 7.1311
-  }
+  },
+  "resumed_eval": "2026-10-24T12:32:45+00:00",
+  "heldout": {
+    "ar": 2.0221418195067167,
+    "ru": 1.3827311119700603,
+    "th": 1.4310891209039778,
+    "avg": 1.6119873507935847,
+    "ppl_avg": 5.012763454704784
+  },
+  "lm_eval": {
+    "hellaswag": 0.48333333333333334,
+    "arc_easy": 0.58,
+    "mmlu": 0.45964912280701753,
+    "belebele_arb_Arab": 0.375,
+    "belebele_rus_Cyrl": 0.43,
+    "belebele_tha_Thai": 0.435,
+    "task_avg": 0.5076608187134503,
+    "lang_avg": 0.41333333333333333,
+    "suite": "quick"
+  },
+  "finished": "2026-10-24T12:36:52+00:00",
+  "wall_s": 261.7
 }
