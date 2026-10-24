@@ -89,3 +89,65 @@ def layer_importance(model, tok, train_items: List[dict], n_samples: int = 256, 
     imp = (imp / imp.max()).tolist() if imp.max() > 0 else imp.tolist()
     base = peft_model.unload()   # remove adapters, give back the clean base model
     return {"importance": imp, "n_samples": len(items)}, base
+
+
+def layer_importance_protocol(model, tok, items: List[dict], r: int = 4, targets=("q_proj", "v_proj"),
+                              bs: int = 4, seed: int = 0, fp16: bool = True) -> Dict:
+    """Spec-style gradient scoring, per batch, with a stability check.
+
+    Protocol
+      1. temporary LoRA (rank r) on `targets` in EVERY layer, dropout 0, fixed seed
+      2. for each scoring batch: response-token loss -> backward -> per-layer score
+         s_l(batch) = L2 norm of the concatenated grad of all LoRA-B matrices in layer l
+      3. S_l = mean over batches of s_l(batch); also std and a split-half rank correlation
+      4. adapters are removed with unload() -> the caller gets the clean base model back
+
+    Why B: LoRA initialises B = 0, so dL/dA = 0 at step 0 (A's gradient is B^T * ...) while
+    dL/dB = (dL/dh) (A x)^T is non-zero: a random projection (through A) of the full
+    weight gradient. Limitation: it depends on the random A, sees only the chosen modules,
+    and is measured at initialisation, so it is a heuristic for where learning signal is
+    strong, not a guarantee of better validation performance. No optimizer step is taken,
+    so per-batch gradients are independent (zeroed after each batch)."""
+    import numpy as np
+    from peft import LoraConfig, get_peft_model
+    torch.manual_seed(seed)
+    dev = next(model.parameters()).device
+    L = n_layers_of(model)
+    cfg = LoraConfig(r=r, lora_alpha=2 * r, lora_dropout=0.0, bias="none", target_modules=list(targets),
+                     task_type="CAUSAL_LM")
+    pm = get_peft_model(model, cfg)
+    pm.train()
+    use_amp = fp16 and dev.type == "cuda"
+    per_batch = []
+    for b in length_grouped_batches([len(x["input_ids"]) for x in items], bs, seed=seed):
+        batch = {k: v.to(dev) for k, v in collate([items[i] for i in b], tok.pad_token_id).items()}
+        with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+            loss = forward_loss(pm, batch, chunked=True)
+        if not torch.isfinite(loss):
+            pm.zero_grad(set_to_none=True)
+            continue
+        (loss * (1024.0 if use_amp else 1.0)).backward()
+        sq = np.zeros(L)
+        for n, p in pm.named_parameters():
+            if "lora_B" in n:
+                assert p.grad is not None, f"missing gradient on {n}"
+                g = p.grad.float()
+                if use_amp:
+                    g = g / 1024.0
+                sq[int(re.search(r"layers\.(\d+)\.", n).group(1))] += g.pow(2).sum().item()
+        per_batch.append(np.sqrt(sq))
+        pm.zero_grad(set_to_none=True)
+    base = pm.unload()
+    M = np.array(per_batch)                                   # [n_batches, L]
+    mean, std = M.mean(0), M.std(0)
+    norm = mean / mean.max() if mean.max() > 0 else mean
+    half = len(M) // 2
+    stab = None
+    if half >= 1:
+        ra = np.argsort(np.argsort(-M[:half].mean(0)))
+        rb = np.argsort(np.argsort(-M[half:].mean(0)))
+        stab = float(np.corrcoef(ra, rb)[0, 1])               # Spearman rank correlation of the two halves
+    return {"scores": norm.tolist(), "raw_mean": mean.tolist(), "raw_std": std.tolist(),
+            "per_batch": M.tolist(), "n_batches": len(M), "n_samples": len(items),
+            "rank": r, "targets": list(targets), "split_half_spearman": stab,
+            "ranking": [int(i) for i in np.argsort(-mean)]}, base

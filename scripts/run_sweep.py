@@ -60,6 +60,21 @@ QUEUES = {
         dict(run_id="imp8_s2", rule="importance", k=8, seed=43),
         dict(run_id="lora_all_s2", rule="all", seed=43),
     ],
+    # Spec suite (experiments A-E): rank-16 LoRA on q_proj/v_proj only, 4-bit base, seq 256, micro-batch 1 x 8,
+    # 1,000 examples/language, layers ranked by the rank-4 q/v gradient protocol (score_layers.py --protocol).
+    # Same held-out set as the main sweep, but its own split cache; probe = the real 1 x 256 shape.
+    "SPEC": [dict(run_id="spec_ref", ref=True, ref_max_len=256, ref_split_cache="data/splits_spec.json",
+                  ref_n_train=1000)] + [dict(run_id=rid, **{**dict(targets=["q_proj", "v_proj"], max_len=256, bs=1, accum=8, n_train=1000,
+                                        quant4=True, chunked=True, score_key="importance_qv_r4", probe_bs=1,
+                                        probe_len=256, split_cache="data/splits_spec.json"), **extra})
+             for rid, extra in [
+                 ("spec_A_all", dict(rule="all")),
+                 ("spec_B_grad6", dict(rule="importance", k=6)),
+                 ("spec_C_grad6_gc", dict(rule="importance", k=6, gc=True)),
+                 ("spec_D_grad6_gc_offload", dict(rule="importance", k=6, gc=True, offload_acts=True)),
+                 ("spec_E_grad3", dict(rule="importance", k=3)),
+                 ("spec_E_grad12", dict(rule="importance", k=12)),
+             ]],
     # Smoke run on a real model (Friday dry run: ~3 min). Delete its results after.
     "DRY": [dict(run_id="dry_top4", rule="top", k=4, max_steps=20, n_train=100, n_eval=20, eval_suite="none")],
 }
@@ -122,7 +137,10 @@ def main():
         t = time.time()
         if spec.pop("ref", False):
             payload = {"ref": dict(model_id="Qwen/Qwen2.5-0.5B-Instruct", langs=["ar", "ru", "th"],
-                                   suite=a.eval_suite, results_dir=a.results_dir, run_id=rid)}
+                                   suite=a.eval_suite, results_dir=a.results_dir, run_id=rid,
+                                   max_len=spec.pop("ref_max_len", 512),
+                                   split_cache=spec.pop("ref_split_cache", "data/splits.json"),
+                                   n_train=spec.pop("ref_n_train", 4000))}
         else:
             frac = spec.pop("budget_frac", None)
             if frac is not None:

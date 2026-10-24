@@ -9,6 +9,8 @@ import argparse
 import json
 import math
 import os
+import resource
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from typing import List, Optional
@@ -17,7 +19,7 @@ import torch
 from transformers import get_cosine_schedule_with_warmup
 
 from . import data as D
-from .model import (adapted_layers, apply_selective_lora, count_params, enable_gradient_checkpointing,
+from .model import (activation_offload, adapted_layers, apply_selective_lora, count_params, enable_gradient_checkpointing,
                     forward_loss, load_model_and_tokenizer, n_layers_of, probe_peak_memory,
                     saved_activation_bytes, synthetic_batch)
 from .selection import CostModel, layer_strip, select_layers
@@ -57,12 +59,23 @@ class RunConfig:
     split_cache: str = "data/splits.json"
     train_only_probe: bool = False            # True -> only measure memory, skip training (demo / 7B check)
     reprobe_only: bool = False                # True -> re-measure memory of an existing run, patch its JSON
+    targets: Optional[List[str]] = None       # LoRA target modules (None = all 7 projections)
+    lora_dropout: float = 0.05
+    score_key: str = "importance"             # which score list in layer_scores.json the importance rule uses
+    offload_acts: bool = False                # autograd-safe CPU activation offloading (save_on_cpu)
+    ckpt_every: int = 100                     # save a resumable training checkpoint every N optimizer steps (0 = off)
+    clip_norm: float = 1.0
 
 
 def resolve_layers(cfg: RunConfig, L: int):
     if cfg.layers is not None:
         return sorted(cfg.layers)
     scores = load_json(cfg.scores_path) if os.path.exists(cfg.scores_path) else None
+    if scores is not None and cfg.score_key != "importance":
+        sk = scores.get(cfg.score_key)
+        if sk is None:
+            raise KeyError(f"score '{cfg.score_key}' not in {cfg.scores_path}: run scripts/score_layers.py first")
+        scores = dict(scores, importance=sk["scores"] if isinstance(sk, dict) else sk)
     cost = None
     if cfg.rule == "budgeted":
         cm = load_json(cfg.cost_model_path)
@@ -72,7 +85,37 @@ def resolve_layers(cfg: RunConfig, L: int):
     return select_layers(cfg.rule, L, k=cfg.k, scores=scores, budget_gb=cfg.budget_gb, cost=cost, seed=cfg.seed)
 
 
+def library_versions() -> dict:
+    v = {"python": sys.version.split()[0], "torch": torch.__version__, "cuda": torch.version.cuda}
+    for mod in ["transformers", "peft", "accelerate", "bitsandbytes", "lm_eval", "datasets"]:
+        try:
+            v[mod] = __import__(mod).__version__
+        except Exception:
+            v[mod] = None
+    return v
+
+
+def peak_rss_gb() -> float:
+    """Peak resident CPU RAM of this process (each run is its own process, so this is per run)."""
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024 ** 2, 3)
+
+
 def run(cfg: RunConfig) -> dict:
+    """Runs one experiment. Out-of-memory is RECORDED in the results file (status = "oom")
+    instead of disappearing, then re-raised so the sweep reports the failure."""
+    try:
+        return _run(cfg)
+    except torch.cuda.OutOfMemoryError as e:
+        res_path = os.path.join(cfg.results_dir, f"{cfg.run_id}.json")
+        prev = load_json(res_path) if os.path.exists(res_path) else {"run_id": cfg.run_id, "config": asdict(cfg)}
+        prev.update({"status": "oom", "error": str(e).splitlines()[0][:300], "failed_at": now_iso(),
+                     "gpu": gpu_name(), "versions": library_versions()})
+        save_json(prev, res_path)
+        print(f"[{cfg.run_id}] OUT OF MEMORY - recorded in {res_path}")
+        raise
+
+
+def _run(cfg: RunConfig) -> dict:
     t0 = time.time()
     set_seed(cfg.seed)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -84,17 +127,21 @@ def run(cfg: RunConfig) -> dict:
     model, tok = load_model_and_tokenizer(cfg.model_id, quant4=cfg.quant4)
     L = n_layers_of(model)
     layers = resolve_layers(cfg, L)
-    model = apply_selective_lora(model, layers, r=cfg.r, alpha=cfg.alpha)
+    model = apply_selective_lora(model, layers, r=cfg.r, alpha=cfg.alpha, dropout=cfg.lora_dropout, targets=cfg.targets)
     if cfg.gc:
         enable_gradient_checkpointing(model)
     got = adapted_layers(model)
     want = list(range(L)) if layers is None else layers
     assert got == want, f"LoRA landed on {got}, expected {want}"
     trainable, total = count_params(model)
-    print(f"[{cfg.run_id}] layers {layer_strip(layers, L)}  trainable={trainable/1e6:.2f}M / {total/1e6:.0f}M")
+    bad = [n for n, p in model.named_parameters() if p.requires_grad and "lora_" not in n]
+    assert not bad, f"non-LoRA parameters are trainable: {bad[:5]}"
+    print(f"[{cfg.run_id}] layers {layer_strip(layers, L)}  trainable={trainable/1e6:.2f}M / {total/1e6:.0f}M "
+          f"({100 * trainable / total:.3f}%)  targets={cfg.targets or 'all 7'}")
 
     vocab = model.get_base_model().get_output_embeddings().weight.shape[0]
-    mem = probe_peak_memory(model, vocab, cfg.probe_bs, cfg.probe_len, chunked=cfg.chunked, fp16=fp16)
+    mem = probe_peak_memory(model, vocab, cfg.probe_bs, cfg.probe_len, chunked=cfg.chunked, fp16=fp16,
+                            offload=cfg.offload_acts)
     sb = synthetic_batch(vocab, 1, 256, dev)
     mem["saved_act_gb_per_256tok"] = round(saved_activation_bytes(model, sb, chunked=cfg.chunked) / GB, 4)
     del sb
@@ -118,7 +165,8 @@ def run(cfg: RunConfig) -> dict:
     result = {"run_id": cfg.run_id, "config": asdict(cfg), "layers": want, "strip": layer_strip(layers, L),
               "n_layers": L, "lowest_layer": min(want), "backprop_depth": L - min(want),
               "trainable_params": trainable, "total_params": total, "memory": mem,
-              "gpu": gpu_name(), "git": git_hash(), "started": now_iso()}
+              "trainable_pct": round(100 * trainable / total, 4),
+              "gpu": gpu_name(), "git": git_hash(), "versions": library_versions(), "started": now_iso()}
     if cfg.train_only_probe:
         result.update({"finished": now_iso(), "wall_s": round(time.time() - t0, 1)})
         save_json(result, res_path)
@@ -149,17 +197,32 @@ def run(cfg: RunConfig) -> dict:
         opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=0.0, betas=(0.9, 0.999))
         sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.03 * total_steps)), total_steps)
         scaler = torch.amp.GradScaler("cuda", enabled=fp16)
+        step, tokens, nan_streak, running, start_bi, prior_s = 0, 0, 0, None, 0, 0.0
+        ckpt_path = os.path.join(run_dir, "ckpt.pt")
+        if cfg.ckpt_every and os.path.exists(ckpt_path):
+            # mid-training resume after a disconnect: same seed -> same batch order, so skip done batches
+            from peft import set_peft_model_state_dict
+            ck = torch.load(ckpt_path, map_location=dev, weights_only=False)
+            set_peft_model_state_dict(model, ck["lora"])
+            opt.load_state_dict(ck["opt"])
+            sched.load_state_dict(ck["sched"])
+            scaler.load_state_dict(ck["scaler"])
+            step, tokens, running, start_bi, prior_s = ck["step"], ck["tokens"], ck["running"], ck["bi"], ck["train_s"]
+            print(f"[{cfg.run_id}] resumed from checkpoint at step {step}/{total_steps}")
+            result["resumed_from_step"] = step
 
         # ---------------- train
         if dev == "cuda":
             torch.cuda.reset_peak_memory_stats()
         model.train()
-        log_f = open(os.path.join(run_dir, "train_log.jsonl"), "w")
-        step, tokens, t_train, nan_streak, running = 0, 0, time.time(), 0, None
+        log_f = open(os.path.join(run_dir, "train_log.jsonl"), "a" if start_bi else "w")
+        t_train, grads_checked = time.time(), False
         for bi, b in enumerate(batches):
+            if bi < start_bi:
+                continue
             batch = {k: v.to(dev) for k, v in D.collate([train_items[i] for i in b], tok.pad_token_id).items()}
             tokens += int(batch["attention_mask"].sum())
-            with torch.autocast("cuda", dtype=torch.float16, enabled=fp16):
+            with torch.autocast("cuda", dtype=torch.float16, enabled=fp16), activation_offload(cfg.offload_acts):
                 loss = forward_loss(model, batch, chunked=cfg.chunked) / cfg.accum
             if not torch.isfinite(loss):
                 nan_streak += 1
@@ -169,31 +232,48 @@ def run(cfg: RunConfig) -> dict:
                 continue
             nan_streak = 0
             scaler.scale(loss).backward()
+            if not grads_checked:
+                missing = [n for n, p in model.named_parameters() if p.requires_grad and p.grad is None]
+                if missing:
+                    raise RuntimeError(f"{len(missing)} LoRA params got no gradient, e.g. {missing[:3]}")
+                grads_checked = True
             if (bi + 1) % cfg.accum == 0:
                 scaler.unscale_(opt)
-                torch.nn.utils.clip_grad_norm_(params, 1.0)
+                if cfg.clip_norm:
+                    torch.nn.utils.clip_grad_norm_(params, cfg.clip_norm)
                 scaler.step(opt)
                 scaler.update()
                 sched.step()
                 opt.zero_grad(set_to_none=True)
                 step += 1
-                l = float(loss) * cfg.accum
+                l = float(loss.detach()) * cfg.accum
                 running = l if running is None else 0.9 * running + 0.1 * l
+                el = prior_s + time.time() - t_train
                 if step % 10 == 0 or step == total_steps:
-                    el = time.time() - t_train
                     rec = {"step": step, "loss": round(l, 4), "ema": round(running, 4), "lr": sched.get_last_lr()[0],
                            "tok_s": round(tokens / el, 1), "elapsed_s": round(el, 1)}
                     log_f.write(json.dumps(rec) + "\n")
                     log_f.flush()
                     print(f"[{cfg.run_id}] step {step}/{total_steps} loss {running:.3f} {rec['tok_s']:.0f} tok/s")
+                if cfg.ckpt_every and step % cfg.ckpt_every == 0 and step < total_steps:
+                    from peft import get_peft_model_state_dict
+                    torch.save({"lora": get_peft_model_state_dict(model), "opt": opt.state_dict(),
+                                "sched": sched.state_dict(), "scaler": scaler.state_dict(), "step": step,
+                                "bi": bi + 1, "tokens": tokens, "running": running, "train_s": el}, ckpt_path + ".tmp")
+                    os.replace(ckpt_path + ".tmp", ckpt_path)
                 if step >= total_steps:
                     break
         cuda_sync()
-        train_s = time.time() - t_train
+        train_s = prior_s + time.time() - t_train
         log_f.close()
         result["train"] = {"steps": step, "tokens": tokens, "train_s": round(train_s, 1),
+                           "step_time_s": round(train_s / max(step, 1), 3),
                            "tok_s": round(tokens / max(train_s, 1e-9), 1), "final_loss_ema": running,
-                           "train_peak_gb": round(torch.cuda.max_memory_allocated() / GB, 4) if dev == "cuda" else None}
+                           "train_peak_gb": round(torch.cuda.max_memory_allocated() / GB, 4) if dev == "cuda" else None,
+                           "train_reserved_gb": round(torch.cuda.max_memory_reserved() / GB, 4) if dev == "cuda" else None,
+                           "peak_cpu_ram_gb": peak_rss_gb()}
+        if os.path.exists(ckpt_path):
+            os.remove(ckpt_path)
         del opt
         free_cuda()
         model.save_pretrained(os.path.join(run_dir, "adapter"))
@@ -233,7 +313,7 @@ def main():
         name = f"--{f.name}"
         if f.type in ("bool", bool):
             p.add_argument(name, action="store_true")
-        elif f.name in ("langs", "layers"):
+        elif f.name in ("langs", "layers", "targets"):
             p.add_argument(name, type=lambda s: [x if not x.isdigit() else int(x) for x in s.split(",")], default=None)
         else:
             typ = {"int": int, "float": float, "str": str}.get(str(f.type).replace("Optional[", "").rstrip("]"), str)

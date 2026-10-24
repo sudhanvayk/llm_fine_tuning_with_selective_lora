@@ -119,3 +119,17 @@ def length_grouped_batches(lengths: List[int], bs: int, seed: int, group_mult: i
         batches += [chunk[k:k + bs] for k in range(0, len(chunk), bs)]
     rng.shuffle(batches)
     return batches
+
+
+def build_scoring_set(langs=DEFAULT_LANGS, n_per_lang=43, n_eval=200, n_train_max=4000, seed=42) -> List[dict]:
+    """Examples for gradient scoring that are DISJOINT from both the held-out set and every
+    training split we use (rows [n_eval + n_train_max, ...) after the same seeded shuffle).
+    No validation leakage, and no overlap with training data either."""
+    out = []
+    for lang in langs:
+        rows = load_multialpaca_lang(lang)
+        random.Random(f"{seed}-{lang}").shuffle(rows)          # identical shuffle to build_splits
+        start = n_eval + n_train_max
+        out += rows[start:start + n_per_lang]
+    random.Random(seed).shuffle(out)
+    return out

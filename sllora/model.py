@@ -9,7 +9,7 @@ Memory levers (each is a flag so its saving can be measured on its own):
 from __future__ import annotations
 
 import re
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -85,17 +85,38 @@ def n_layers_of(model) -> int:
 
 # --------------------------------------------------------------------------- LoRA
 def apply_selective_lora(model, layers: Optional[Iterable[int]], r: int = 16, alpha: int = 32,
-                         dropout: float = 0.05):
-    """layers=None -> all layers (standard LoRA baseline)."""
+                         dropout: float = 0.05, targets: Optional[Sequence[str]] = None):
+    """layers=None -> all layers (standard LoRA baseline). targets defaults to all 7 projections."""
     from peft import LoraConfig, get_peft_model
     L = n_layers_of(model)
     layers = None if layers is None else sorted(set(int(i) for i in layers))
-    if layers is not None and len(layers) == L:
-        layers = None
+    if layers is not None:
+        bad = [i for i in layers if i < 0 or i >= L]
+        if bad or not layers:
+            raise ValueError(f"invalid layer indices {bad or layers}: model has layers 0..{L - 1}")
+        if len(layers) == L:
+            layers = None
+    targets = list(targets or TARGET_MODULES)
+    present = {n.split(".")[-1] for n, _ in model.named_modules()}
+    missing = [t for t in targets if t not in present]
+    if missing:
+        raise ValueError(f"target modules {missing} not found in model (have e.g. {sorted(present)[:12]})")
     cfg = LoraConfig(r=r, lora_alpha=alpha, lora_dropout=dropout, bias="none",
-                     target_modules=TARGET_MODULES, task_type="CAUSAL_LM",
+                     target_modules=targets, task_type="CAUSAL_LM",
                      layers_to_transform=layers, layers_pattern="layers" if layers is not None else None)
     return get_peft_model(model, cfg)
+
+
+def activation_offload(enabled: bool):
+    """Autograd-safe CPU activation offloading (torch.autograd.graph.save_on_cpu).
+    Every tensor autograd saves for backward is copied to (pinned) CPU RAM during the
+    forward pass and copied back on demand in backward, so the backward graph stays
+    intact. Wrap ONLY the forward pass. With gradient checkpointing, tensors inside
+    checkpointed blocks are handled by checkpointing; the rest go to CPU."""
+    import contextlib
+    if not enabled:
+        return contextlib.nullcontext()
+    return torch.autograd.graph.save_on_cpu(pin_memory=torch.cuda.is_available())
 
 
 def enable_gradient_checkpointing(model) -> None:
@@ -200,7 +221,7 @@ def saved_activation_bytes(model, batch, chunked=False) -> int:
 
 
 def probe_peak_memory(model, vocab: int, bs: int = 4, seq_len: int = 512, chunked: bool = False,
-                      steps: int = 2, fp16: bool = True) -> dict:
+                      steps: int = 2, fp16: bool = True, offload: bool = False) -> dict:
     """Deterministic peak-memory measurement: `steps` full forward+backward+AdamW
     steps on a fixed synthetic [bs, seq_len] batch. lr=0 so weights do not move.
     This is the headline number for every configuration."""
@@ -216,7 +237,7 @@ def probe_peak_memory(model, vocab: int, bs: int = 4, seq_len: int = 512, chunke
     scaler = torch.amp.GradScaler("cuda", enabled=fp16)
     model.train()
     for _ in range(steps):
-        with torch.autocast("cuda", dtype=torch.float16, enabled=fp16):
+        with torch.autocast("cuda", dtype=torch.float16, enabled=fp16), activation_offload(offload):
             loss = forward_loss(model, batch, chunked=chunked)
         scaler.scale(loss).backward()
         scaler.step(opt)
