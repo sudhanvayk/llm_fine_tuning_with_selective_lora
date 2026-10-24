@@ -1,0 +1,8 @@
+outputs/
+data/splits.json
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+wandb/
+*.safetensors
+*.bin
