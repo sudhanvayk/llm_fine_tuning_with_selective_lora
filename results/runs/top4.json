@@ -1,0 +1,70 @@
+{
+  "run_id": "top4",
+  "config": {
+    "run_id": "top4",
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "rule": "top",
+    "k": 4,
+    "budget_gb": null,
+    "layers": null,
+    "quant4": false,
+    "gc": false,
+    "chunked": true,
+    "r": 16,
+    "alpha": 32,
+    "lr": 0.0002,
+    "epochs": 1,
+    "bs": 8,
+    "accum": 2,
+    "max_len": 512,
+    "langs": [
+      "ar",
+      "ru",
+      "th"
+    ],
+    "n_train": 4000,
+    "n_eval": 200,
+    "seed": 42,
+    "eval_suite": "quick",
+    "probe_bs": 4,
+    "probe_len": 512,
+    "max_steps": null,
+    "out_dir": "/content/drive/MyDrive/hashcode_sllora/outputs",
+    "results_dir": "results/runs",
+    "scores_path": "results/scores/layer_scores.json",
+    "cost_model_path": "results/scores/cost_model.json",
+    "split_cache": "data/splits.json",
+    "train_only_probe": false
+  },
+  "layers": [
+    20,
+    21,
+    22,
+    23
+  ],
+  "strip": "....................####",
+  "n_layers": 24,
+  "lowest_layer": 20,
+  "backprop_depth": 4,
+  "trainable_params": 1466368,
+  "total_params": 495499136,
+  "memory": {
+    "probe_peak_gb": 6.1341,
+    "probe_reserved_gb": 6.3535,
+    "weights_gb": 4.8682,
+    "probe_bs": 4,
+    "probe_seq_len": 512,
+    "saved_act_gb_per_256tok": 0.1076
+  },
+  "gpu": "Tesla T4",
+  "git": "d869512",
+  "started": "2026-10-24T11:50:06+00:00",
+  "train": {
+    "steps": 750,
+    "tokens": 1601320,
+    "train_s": 225.4,
+    "tok_s": 7104.0,
+    "final_loss_ema": 1.6128965963025568,
+    "train_peak_gb": 6.5828
+  }
+}

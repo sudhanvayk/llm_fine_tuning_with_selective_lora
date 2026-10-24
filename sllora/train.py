@@ -56,6 +56,7 @@ class RunConfig:
     cost_model_path: str = "results/scores/cost_model.json"
     split_cache: str = "data/splits.json"
     train_only_probe: bool = False            # True -> only measure memory, skip training (demo / 7B check)
+    reprobe_only: bool = False                # True -> re-measure memory of an existing run, patch its JSON
 
 
 def resolve_layers(cfg: RunConfig, L: int):
@@ -99,7 +100,20 @@ def run(cfg: RunConfig) -> dict:
     del sb
     model.zero_grad(set_to_none=True)
     free_cuda()
+    mem["isolated"] = os.environ.get("SLLORA_ISOLATED") == "1"   # measured in a fresh process (no leftovers)
     print(f"[{cfg.run_id}] memory probe: {mem}")
+
+    prev = load_json(res_path) if os.path.exists(res_path) else None
+    if cfg.reprobe_only:
+        assert prev, f"no results file for {cfg.run_id}"
+        prev["memory"] = mem
+        prev["memory_reprobed"] = now_iso()
+        save_json(prev, res_path)
+        print(f"[{cfg.run_id}] re-measured memory saved -> {res_path}")
+        return prev
+    adapter_dir = os.path.join(run_dir, "adapter")
+    resume = bool(prev and "train" in prev and "finished" not in prev
+                  and os.path.exists(os.path.join(adapter_dir, "adapter_config.json")))
 
     result = {"run_id": cfg.run_id, "config": asdict(cfg), "layers": want, "strip": layer_strip(layers, L),
               "n_layers": L, "lowest_layer": min(want), "backprop_depth": L - min(want),
@@ -121,59 +135,69 @@ def run(cfg: RunConfig) -> dict:
         total_steps = min(total_steps, cfg.max_steps)
         batches = batches[: total_steps * cfg.accum]
 
-    params = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=0.0, betas=(0.9, 0.999))
-    sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.03 * total_steps)), total_steps)
-    scaler = torch.amp.GradScaler("cuda", enabled=fp16)
+    if resume:
+        # training already finished in an earlier attempt; only the evaluation crashed -> reuse the adapter
+        from peft import set_peft_model_state_dict
+        from safetensors.torch import load_file
+        set_peft_model_state_dict(model, load_file(os.path.join(adapter_dir, "adapter_model.safetensors")))
+        result["train"] = prev["train"]
+        result["started"] = prev.get("started", result["started"])
+        result["resumed_eval"] = now_iso()
+        print(f"[{cfg.run_id}] training already done -> loaded saved adapter, re-running evaluation only")
+    else:
+        params = [p for p in model.parameters() if p.requires_grad]
+        opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=0.0, betas=(0.9, 0.999))
+        sched = get_cosine_schedule_with_warmup(opt, max(1, int(0.03 * total_steps)), total_steps)
+        scaler = torch.amp.GradScaler("cuda", enabled=fp16)
 
-    # ---------------- train
-    if dev == "cuda":
-        torch.cuda.reset_peak_memory_stats()
-    model.train()
-    log_f = open(os.path.join(run_dir, "train_log.jsonl"), "w")
-    step, tokens, t_train, nan_streak, running = 0, 0, time.time(), 0, None
-    for bi, b in enumerate(batches):
-        batch = {k: v.to(dev) for k, v in D.collate([train_items[i] for i in b], tok.pad_token_id).items()}
-        tokens += int(batch["attention_mask"].sum())
-        with torch.autocast("cuda", dtype=torch.float16, enabled=fp16):
-            loss = forward_loss(model, batch, chunked=cfg.chunked) / cfg.accum
-        if not torch.isfinite(loss):
-            nan_streak += 1
-            if nan_streak >= 5:
-                raise RuntimeError("Loss is NaN/inf 5x in a row: rerun with fp32 base (load dtype float32) or lr 1e-4")
-            opt.zero_grad(set_to_none=True)
-            continue
-        nan_streak = 0
-        scaler.scale(loss).backward()
-        if (bi + 1) % cfg.accum == 0:
-            scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(params, 1.0)
-            scaler.step(opt)
-            scaler.update()
-            sched.step()
-            opt.zero_grad(set_to_none=True)
-            step += 1
-            l = float(loss) * cfg.accum
-            running = l if running is None else 0.9 * running + 0.1 * l
-            if step % 10 == 0 or step == total_steps:
-                el = time.time() - t_train
-                rec = {"step": step, "loss": round(l, 4), "ema": round(running, 4), "lr": sched.get_last_lr()[0],
-                       "tok_s": round(tokens / el, 1), "elapsed_s": round(el, 1)}
-                log_f.write(json.dumps(rec) + "\n")
-                log_f.flush()
-                print(f"[{cfg.run_id}] step {step}/{total_steps} loss {running:.3f} {rec['tok_s']:.0f} tok/s")
-            if step >= total_steps:
-                break
-    cuda_sync()
-    train_s = time.time() - t_train
-    log_f.close()
-    result["train"] = {"steps": step, "tokens": tokens, "train_s": round(train_s, 1),
-                       "tok_s": round(tokens / max(train_s, 1e-9), 1), "final_loss_ema": running,
-                       "train_peak_gb": round(torch.cuda.max_memory_allocated() / GB, 4) if dev == "cuda" else None}
-    del opt
-    free_cuda()
-    model.save_pretrained(os.path.join(run_dir, "adapter"))
-    save_json(result, res_path)  # partial result survives an eval crash
+        # ---------------- train
+        if dev == "cuda":
+            torch.cuda.reset_peak_memory_stats()
+        model.train()
+        log_f = open(os.path.join(run_dir, "train_log.jsonl"), "w")
+        step, tokens, t_train, nan_streak, running = 0, 0, time.time(), 0, None
+        for bi, b in enumerate(batches):
+            batch = {k: v.to(dev) for k, v in D.collate([train_items[i] for i in b], tok.pad_token_id).items()}
+            tokens += int(batch["attention_mask"].sum())
+            with torch.autocast("cuda", dtype=torch.float16, enabled=fp16):
+                loss = forward_loss(model, batch, chunked=cfg.chunked) / cfg.accum
+            if not torch.isfinite(loss):
+                nan_streak += 1
+                if nan_streak >= 5:
+                    raise RuntimeError("Loss is NaN/inf 5x in a row: rerun with fp32 base (load dtype float32) or lr 1e-4")
+                opt.zero_grad(set_to_none=True)
+                continue
+            nan_streak = 0
+            scaler.scale(loss).backward()
+            if (bi + 1) % cfg.accum == 0:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(params, 1.0)
+                scaler.step(opt)
+                scaler.update()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
+                step += 1
+                l = float(loss) * cfg.accum
+                running = l if running is None else 0.9 * running + 0.1 * l
+                if step % 10 == 0 or step == total_steps:
+                    el = time.time() - t_train
+                    rec = {"step": step, "loss": round(l, 4), "ema": round(running, 4), "lr": sched.get_last_lr()[0],
+                           "tok_s": round(tokens / el, 1), "elapsed_s": round(el, 1)}
+                    log_f.write(json.dumps(rec) + "\n")
+                    log_f.flush()
+                    print(f"[{cfg.run_id}] step {step}/{total_steps} loss {running:.3f} {rec['tok_s']:.0f} tok/s")
+                if step >= total_steps:
+                    break
+        cuda_sync()
+        train_s = time.time() - t_train
+        log_f.close()
+        result["train"] = {"steps": step, "tokens": tokens, "train_s": round(train_s, 1),
+                           "tok_s": round(tokens / max(train_s, 1e-9), 1), "final_loss_ema": running,
+                           "train_peak_gb": round(torch.cuda.max_memory_allocated() / GB, 4) if dev == "cuda" else None}
+        del opt
+        free_cuda()
+        model.save_pretrained(os.path.join(run_dir, "adapter"))
+        save_json(result, res_path)  # partial result survives an eval crash
 
     # ---------------- eval
     from .evaluate import heldout_loss

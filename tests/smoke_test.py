@@ -13,6 +13,7 @@ import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""   # this test is CPU-only by design, even on a GPU runtime
 
+import os; os.environ["CUDA_VISIBLE_DEVICES"] = ""
 import random
 import shutil
 import sys

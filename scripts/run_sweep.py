@@ -7,6 +7,7 @@ Each finished run writes results/runs/<run_id>.json and (with --git_push) commit
 so the GitHub history shows every run landing, with timestamps, during the event.
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ from sllora.utils import load_json
 # Rule comparison runs use no other levers, so quality differences come from layer choice alone.
 QUEUES = {
     "A": [  # M1 - baselines + memory-lever stack (needed for Review 1)
-        dict(run_id="lora_all_plain", rule="all", chunked=False),
+        dict(run_id="lora_all_plain", rule="all", chunked=False, bs=4, accum=4),   # batch 8 OOMs a T4 with full logits
         dict(run_id="lora_all", rule="all"),
         dict(run_id="top8", rule="top", k=8),
         dict(run_id="top8_q4_gc", rule="top", k=8, quant4=True, gc=True),
@@ -102,7 +103,6 @@ def main():
             print(q, [r["run_id"] for r in runs])
         return
 
-    from sllora.train import RunConfig, eval_reference, run
     runs = QUEUES[a.queue]
     if a.only:
         keep = set(a.only.split(","))
@@ -111,38 +111,54 @@ def main():
         spec = dict(spec)
         rid = spec["run_id"]
         res_path = os.path.join(a.results_dir, f"{rid}.json")
+        drive_path = os.path.join(a.drive_results, f"{rid}.json") if a.drive_results else None
+        if not os.path.exists(res_path) and drive_path and os.path.exists(drive_path):
+            os.makedirs(a.results_dir, exist_ok=True)
+            shutil.copy(drive_path, res_path)          # restore after a Colab restart (enables eval-only resume)
         if os.path.exists(res_path) and "finished" in load_json(res_path):
             print(f"== skip {rid} (done)")
             continue
-        print(f"\n== {rid}  {time.strftime('%H:%M:%S')}")
+        print(f"\n== {rid}  {time.strftime('%H:%M:%S')}", flush=True)
         t = time.time()
-        try:
-            if spec.pop("ref", False):
-                eval_reference("Qwen/Qwen2.5-0.5B-Instruct", ["ar", "ru", "th"], suite=a.eval_suite,
-                               results_dir=a.results_dir, run_id=rid)
-            else:
-                frac = spec.pop("budget_frac", None)
-                if frac is not None:
-                    cms = load_json("results/scores/cost_model.json")
-                    lev = f"Qwen2.5-0.5B-Instruct|q4={int(spec.get('quant4', False))},gc={int(spec.get('gc', False))},ck={int(spec.get('chunked', False))}"
-                    cm = cms.get(lev, cms["default"])
-                    c = CostModel(**{f: cm[f] for f in ("n_layers", "base_gb", "per_adapted_gb", "per_depth_gb")})
-                    # frac of the LAYER-DEPENDENT memory: weights + logits are a fixed floor
-                    floor, full = c.cost([c.n_layers - 1]), c.cost(list(range(c.n_layers)))
-                    spec["budget_gb"] = round(floor + frac * (full - floor), 3)
-                    print(f"   budget = floor {floor:.2f} + {frac:.0%} x ({full:.2f} - {floor:.2f}) = {spec['budget_gb']} GB")
-                spec.setdefault("eval_suite", a.eval_suite)
-                run(RunConfig(out_dir=a.out, results_dir=a.results_dir, **spec))
-        except Exception:
-            traceback.print_exc()
-            print(f"!! {rid} failed, moving on")
+        if spec.pop("ref", False):
+            payload = {"ref": dict(model_id="Qwen/Qwen2.5-0.5B-Instruct", langs=["ar", "ru", "th"],
+                                   suite=a.eval_suite, results_dir=a.results_dir, run_id=rid)}
+        else:
+            frac = spec.pop("budget_frac", None)
+            if frac is not None:
+                cms = load_json("results/scores/cost_model.json")
+                lev = f"Qwen2.5-0.5B-Instruct|q4={int(spec.get('quant4', False))},gc={int(spec.get('gc', False))},ck={int(spec.get('chunked', False))}"
+                cm = cms.get(lev, cms["default"])
+                c = CostModel(**{f: cm[f] for f in ("n_layers", "base_gb", "per_adapted_gb", "per_depth_gb")})
+                # frac of the LAYER-DEPENDENT memory: weights + logits are a fixed floor
+                floor, full = c.cost([c.n_layers - 1]), c.cost(list(range(c.n_layers)))
+                spec["budget_gb"] = round(floor + frac * (full - floor), 3)
+                print(f"   budget = floor {floor:.2f} + {frac:.0%} x ({full:.2f} - {floor:.2f}) = {spec['budget_gb']} GB")
+            spec.setdefault("eval_suite", a.eval_suite)
+            payload = {"cfg": dict(out_dir=a.out, results_dir=a.results_dir, **spec)}
+        rc = run_isolated(payload)
+        if a.drive_results and os.path.exists(res_path):
+            os.makedirs(a.drive_results, exist_ok=True)
+            shutil.copy(res_path, a.drive_results)     # copy even partial results (training done, eval failed)
+        if rc != 0:
+            print(f"!! {rid} failed (exit {rc}), moving on. Re-run the queue later: finished parts are reused.")
             continue
         mins = (time.time() - t) / 60
-        if a.drive_results:
-            os.makedirs(a.drive_results, exist_ok=True)
-            shutil.copy(res_path, a.drive_results)
         if a.git_push:
             git_push([res_path], f"results: {rid} ({mins:.0f} min, queue {a.queue})")
+
+
+CHILD = ("import json, sys; sys.path.insert(0, '.'); "
+         "from sllora.train import RunConfig, run, eval_reference; "
+         "p = json.loads(sys.argv[1]); "
+         "eval_reference(**p['ref']) if 'ref' in p else run(RunConfig(**p['cfg']))")
+
+
+def run_isolated(payload) -> int:
+    """Every experiment runs in its OWN Python process, so GPU memory starts empty each time.
+    (Running them in one process leaked ~1-1.5 GB per run on Colab and inflated memory numbers.)"""
+    env = dict(os.environ, SLLORA_ISOLATED="1", PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
+    return subprocess.run([sys.executable, "-c", CHILD, json.dumps(payload)], env=env).returncode
 
 
 if __name__ == "__main__":

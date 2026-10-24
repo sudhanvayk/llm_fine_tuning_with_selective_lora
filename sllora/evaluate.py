@@ -46,7 +46,7 @@ def heldout_loss(model, tok, eval_items: Dict[str, List[dict]], bs: int = 8) -> 
     return out
 
 
-def lm_eval_scores(model, tok, langs: List[str], suite: str = "quick", batch_size: int = 16) -> Dict:
+def lm_eval_scores(model, tok, langs: List[str], suite: str = "quick", batch_size: int = 8) -> Dict:
     """Runs lm-eval on the in-memory (PEFT) model, so 4-bit runs are scored as trained."""
     import lm_eval
     from lm_eval.models.huggingface import HFLM
