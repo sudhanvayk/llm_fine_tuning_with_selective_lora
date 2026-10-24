@@ -1,0 +1,50 @@
+{
+  "Qwen2.5-0.5B-Instruct|q4=0,gc=0,ck=0": {
+    "n_layers": 24,
+    "base_gb": 4.418317299824664,
+    "per_adapted_gb": 0.06402080654587936,
+    "per_depth_gb": 0.14605786090005846,
+    "r2": 1.0,
+    "model": "Qwen2.5-0.5B-Instruct"
+  },
+  "default": {
+    "n_layers": 24,
+    "base_gb": 4.418317299824664,
+    "per_adapted_gb": 0.06402080654587936,
+    "per_depth_gb": 0.14605786090005846,
+    "r2": 1.0,
+    "model": "Qwen2.5-0.5B-Instruct"
+  },
+  "Qwen2.5-0.5B-Instruct|q4=0,gc=0,ck=1": {
+    "n_layers": 24,
+    "base_gb": 1.3820234950321455,
+    "per_adapted_gb": 0.06396035213325521,
+    "per_depth_gb": 0.14610189216832262,
+    "r2": 1.0,
+    "model": "Qwen2.5-0.5B-Instruct"
+  },
+  "Qwen2.5-0.5B-Instruct|q4=0,gc=1,ck=1": {
+    "n_layers": 24,
+    "base_gb": 1.3941858854471072,
+    "per_adapted_gb": 0.004095693308006992,
+    "per_depth_gb": 0.003358704704850939,
+    "r2": 0.9999,
+    "model": "Qwen2.5-0.5B-Instruct"
+  },
+  "Qwen2.5-0.5B-Instruct|q4=1,gc=0,ck=1": {
+    "n_layers": 24,
+    "base_gb": 0.8827864699006435,
+    "per_adapted_gb": 0.06649470704266508,
+    "per_depth_gb": 0.1461015378433664,
+    "r2": 1.0,
+    "model": "Qwen2.5-0.5B-Instruct"
+  },
+  "Qwen2.5-0.5B-Instruct|q4=1,gc=1,ck=1": {
+    "n_layers": 24,
+    "base_gb": 0.8931617475160724,
+    "per_adapted_gb": 0.004092676066627692,
+    "per_depth_gb": 0.0033634460841612977,
+    "r2": 0.9999,
+    "model": "Qwen2.5-0.5B-Instruct"
+  }
+}
