@@ -22,7 +22,7 @@ os.makedirs(OUT, exist_ok=True)
 RULE_COLORS = {"all": "#2a78d6", "top": "#eb6834", "random": "#1baf7a", "drift_protect": "#eda100",
                "importance": "#e87ba4", "budgeted": "#6250d6", "bottom": "#008300"}
 RULE_LABEL = {"all": "All-layer LoRA", "top": "Top-k", "random": "Random-k (LF_H1)",
-              "drift_protect": "Drift-protect-k (LF_H2)", "importance": "Importance-k", "budgeted": "Budgeted",
+              "drift_protect": "Drift-protect-k (LF_H2-inspired)", "importance": "Importance-k", "budgeted": "Budgeted",
               "bottom": "Bottom-k (control)"}
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 plt.rcParams.update({"font.size": 11, "axes.edgecolor": MUTED, "axes.labelcolor": INK, "xtick.color": MUTED,
@@ -72,7 +72,7 @@ def pareto(df):
             ax.scatter(g.mem, g[y], s=40 + 6 * g.k, color=RULE_COLORS.get(rule, MUTED), label=RULE_LABEL.get(rule, rule),
                        edgecolor="white", linewidth=1.5, zorder=3)
             for _, r in g.iterrows():
-                if rule in ("all", "top", "budgeted", "importance"):
+                if rule in ("all", "top", "budgeted", "importance", "drift_protect"):
                     ax.annotate(r.run_id, (r.mem, r[y]), xytext=(5, 4), textcoords="offset points", fontsize=8, color=MUTED)
         f = frontier(df, y, hb)
         if len(f) > 1:
