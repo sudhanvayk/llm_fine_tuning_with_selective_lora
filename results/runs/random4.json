@@ -1,0 +1,90 @@
+{
+  "run_id": "random4",
+  "config": {
+    "run_id": "random4",
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "rule": "random",
+    "k": 4,
+    "budget_gb": null,
+    "layers": null,
+    "quant4": false,
+    "gc": false,
+    "chunked": true,
+    "r": 16,
+    "alpha": 32,
+    "lr": 0.0002,
+    "epochs": 1,
+    "bs": 8,
+    "accum": 2,
+    "max_len": 512,
+    "langs": [
+      "ar",
+      "ru",
+      "th"
+    ],
+    "n_train": 4000,
+    "n_eval": 200,
+    "seed": 42,
+    "eval_suite": "quick",
+    "probe_bs": 4,
+    "probe_len": 512,
+    "max_steps": null,
+    "out_dir": "/content/drive/MyDrive/hashcode_sllora/outputs",
+    "results_dir": "results/runs",
+    "scores_path": "results/scores/layer_scores.json",
+    "cost_model_path": "results/scores/cost_model.json",
+    "split_cache": "data/splits.json",
+    "train_only_probe": false
+  },
+  "layers": [
+    0,
+    3,
+    20,
+    23
+  ],
+  "strip": "#..#................#..#",
+  "n_layers": 24,
+  "lowest_layer": 0,
+  "backprop_depth": 24,
+  "trainable_params": 1466368,
+  "total_params": 495499136,
+  "memory": {
+    "probe_peak_gb": 7.4032,
+    "probe_reserved_gb": 7.752,
+    "weights_gb": 3.2183,
+    "probe_bs": 4,
+    "probe_seq_len": 512,
+    "saved_act_gb_per_256tok": 0.4006
+  },
+  "gpu": "Tesla T4",
+  "git": "b5d6cd2",
+  "started": "2026-10-24T11:44:27+00:00",
+  "train": {
+    "steps": 750,
+    "tokens": 1601320,
+    "train_s": 356.3,
+    "tok_s": 4494.6,
+    "final_loss_ema": 1.5562245761339035,
+    "train_peak_gb": 8.6394
+  },
+  "heldout": {
+    "ar": 1.9932329923251022,
+    "ru": 1.3617613003149,
+    "th": 1.4169697566664181,
+    "avg": 1.5906546831021402,
+    "ppl_avg": 4.9069603810143345
+  },
+  "lm_eval": {
+    "hellaswag": 0.48333333333333334,
+    "arc_easy": 0.6166666666666667,
+    "mmlu": 0.47719298245614034,
+    "belebele_arb_Arab": 0.395,
+    "belebele_rus_Cyrl": 0.45,
+    "belebele_tha_Thai": 0.45,
+    "task_avg": 0.5257309941520468,
+    "lang_avg": 0.43166666666666664,
+    "suite": "quick"
+  },
+  "finished": "2026-10-24T11:53:29+00:00",
+  "wall_s": 546.5
+}
