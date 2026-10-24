@@ -1,0 +1,7 @@
+run_id,rule,levers,layers,n_adapted,trainable_params,trainable_pct,peak_gb,reserved_gb,train_peak_gb,mem_status,mem_reduction_pct,heldout_loss,task_avg,lang_avg,d_task_pts,tok_s,step_time_s,train_min,cpu_ram_gb,status,pareto
+spec_C_grad6_gc,importance,NF4+GC+chunk,###.#......##...........,6,270336,0.0857,0.7824,0.8516,0.8306,measured,32.4,1.7521536798816981,0.5051461988304093,0.33,-0.59,451.8,2.326,14.5,1.943,done,True
+spec_D_grad6_gc_offload,importance,NF4+GC+chunk+offload,###.#......##...........,6,270336,0.0857,1.0245,1.0977,1.0727,measured,11.4,1.7521536798816981,0.5051461988304093,0.33,-0.59,395.6,2.657,16.6,2.381,done,False
+spec_E_grad3,importance,NF4+chunk,#.#.#...................,3,135168,0.0429,1.1242,1.2559,1.5166,measured,2.8,1.768566552192393,0.5085380116959064,0.33166666666666667,-0.25,748.5,1.404,8.8,1.944,done,False
+spec_B_grad6,importance,NF4+chunk,###.#......##...........,6,270336,0.0857,1.1289,1.2578,1.5293,measured,2.4,1.7521536798816981,0.5051461988304093,0.33,-0.59,730.7,1.438,9.0,1.944,done,False
+spec_E_grad12,importance,NF4+chunk,#####.#.#####...#.......,12,540672,0.1713,1.1382,1.2695,1.5546,measured,1.6,1.7367281715061142,0.5023976608187134,0.32,-0.87,714.8,1.47,9.2,1.944,done,True
+spec_A_all,all,NF4+chunk,########################,24,1081344,0.342,1.1568,1.2871,1.6042,measured,0.0,1.7139192996568193,0.5095321637426901,0.355,-0.15,636.2,1.652,10.3,1.944,done,True
