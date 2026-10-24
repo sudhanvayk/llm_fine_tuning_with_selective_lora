@@ -54,12 +54,13 @@
   "trainable_params": 3299328,
   "total_params": 497332096,
   "memory": {
-    "probe_peak_gb": 6.1802,
-    "probe_reserved_gb": 6.4844,
-    "weights_gb": 3.8728,
+    "probe_peak_gb": 3.247,
+    "probe_reserved_gb": 3.4141,
+    "weights_gb": 0.9325,
     "probe_bs": 4,
     "probe_seq_len": 512,
-    "saved_act_gb_per_256tok": 0.2424
+    "saved_act_gb_per_256tok": 0.2424,
+    "isolated": true
   },
   "gpu": "Tesla T4",
   "git": "d869512",
@@ -91,5 +92,6 @@
     "suite": "quick"
   },
   "finished": "2026-10-24T12:18:17+00:00",
-  "wall_s": 500.6
+  "wall_s": 500.6,
+  "memory_reprobed": "2026-10-24T17:17:33+00:00"
 }
