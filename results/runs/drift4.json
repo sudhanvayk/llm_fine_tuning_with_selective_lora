@@ -1,0 +1,92 @@
+{
+  "run_id": "drift4",
+  "config": {
+    "run_id": "drift4",
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "rule": "drift_protect",
+    "k": 4,
+    "budget_gb": null,
+    "layers": null,
+    "quant4": false,
+    "gc": false,
+    "chunked": true,
+    "r": 16,
+    "alpha": 32,
+    "lr": 0.0002,
+    "epochs": 1,
+    "bs": 8,
+    "accum": 2,
+    "max_len": 512,
+    "langs": [
+      "ar",
+      "ru",
+      "th"
+    ],
+    "n_train": 4000,
+    "n_eval": 200,
+    "seed": 42,
+    "eval_suite": "quick",
+    "probe_bs": 4,
+    "probe_len": 512,
+    "max_steps": null,
+    "out_dir": "/content/drive/MyDrive/hashcode_sllora (1)/outputs",
+    "results_dir": "results/runs",
+    "scores_path": "results/scores/layer_scores.json",
+    "cost_model_path": "results/scores/cost_model.json",
+    "split_cache": "data/splits.json",
+    "train_only_probe": false,
+    "reprobe_only": false
+  },
+  "layers": [
+    0,
+    1,
+    2,
+    6
+  ],
+  "strip": "###...#.................",
+  "n_layers": 24,
+  "lowest_layer": 0,
+  "backprop_depth": 24,
+  "trainable_params": 1466368,
+  "total_params": 495499136,
+  "memory": {
+    "probe_peak_gb": 5.0962,
+    "probe_reserved_gb": 5.2949,
+    "weights_gb": 0.9257,
+    "probe_bs": 4,
+    "probe_seq_len": 512,
+    "saved_act_gb_per_256tok": 0.4006,
+    "isolated": true
+  },
+  "gpu": "Tesla T4",
+  "git": "34b7e68",
+  "started": "2026-10-24T17:12:35+00:00",
+  "train": {
+    "steps": 750,
+    "tokens": 1601320,
+    "train_s": 299.8,
+    "tok_s": 5341.1,
+    "final_loss_ema": 1.5764180353701427,
+    "train_peak_gb": 6.3502
+  },
+  "heldout": {
+    "ar": 2.0159646201744383,
+    "ru": 1.3686753870408035,
+    "th": 1.4346779625874588,
+    "avg": 1.6064393232675667,
+    "ppl_avg": 4.985029510558368
+  },
+  "lm_eval": {
+    "hellaswag": 0.48,
+    "arc_easy": 0.6333333333333333,
+    "mmlu": 0.47017543859649125,
+    "belebele_arb_Arab": 0.41,
+    "belebele_rus_Cyrl": 0.445,
+    "belebele_tha_Thai": 0.43,
+    "task_avg": 0.5278362573099415,
+    "lang_avg": 0.4283333333333333,
+    "suite": "quick"
+  },
+  "finished": "2026-10-24T17:20:30+00:00",
+  "wall_s": 480.3
+}
