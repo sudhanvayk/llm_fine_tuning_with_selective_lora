@@ -114,7 +114,7 @@ with gr.Blocks(title="Selective-Layer LoRA") as demo:
         btn.click(meter, [rule, k, q4, gc_, ck], [out_md, out_plot])
     with gr.Tab("Results"):
         b2 = gr.Button("Load latest results")
-        r_md, r_gal = gr.Markdown(), gr.Gallery(columns=1, height=520)
+        r_md, r_gal = gr.Markdown(), gr.Gallery(columns=1, height=520, object_fit='contain', preview=True)
         b2.click(results_tab, None, [r_md, r_gal])
     with gr.Tab("7B calculator"):
         with gr.Row():
